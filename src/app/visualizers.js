@@ -1,5 +1,9 @@
 const TAU = Math.PI * 2;
 const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
+const sonogramPalette = Array.from({ length: 16 }, (_, index) => {
+  const energy = index / 15;
+  return `hsl(${178 - energy * 135} 100% ${15 + energy * 48}%)`;
+});
 const seeded = (index) => {
   const value = Math.sin(index * 127.1 + 311.7) * 43758.5453;
   return value - Math.floor(value);
@@ -12,14 +16,18 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
   const cy = h / 2;
   const size = Math.min(w, h);
   const band = (position) => {
-    if (!spectrum?.length) return 0.035 + 0.025 * Math.sin(time * 2.4 + position * 0.7);
+    if (!spectrum?.length) return 0;
     const index = Math.floor(Math.pow(clamp(position / 96), 1.8) * (spectrum.length - 1));
-    const raw = spectrum[index] || 0;
-    return clamp(raw / 255 + 0.018 * Math.sin(time * 2 + position));
+    const raw = (spectrum[index] || 0) / 255;
+    return raw < 0.012 ? 0 : clamp(Math.pow((raw - 0.012) * 1.55, 0.88));
   };
   const level = clamp((band(4) + band(15) + band(35) + band(68)) / 2.1);
-  const signal = getComputedStyle(document.querySelector(".crt") || document.documentElement)
-    .getPropertyValue("--signal").trim() || "#9bff79";
+  if (!state.signal || time - (state.signalCheckedAt || 0) > 2) {
+    state.signal = getComputedStyle(document.querySelector(".crt") || document.documentElement)
+      .getPropertyValue("--signal").trim() || "#9bff79";
+    state.signalCheckedAt = time;
+  }
+  const signal = state.signal;
   const line = (points, alpha = 1, widthPx = 1.4) => {
     if (!points.length) return;
     ctx.save();
@@ -46,7 +54,7 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
   ctx.strokeStyle = signal;
   ctx.fillStyle = signal;
   ctx.shadowColor = signal;
-  ctx.shadowBlur = 9;
+  ctx.shadowBlur = 4;
   ctx.lineWidth = Math.max(1, size * 0.0035);
 
   if (name === "OSCILLOSCOPE") {
@@ -110,7 +118,7 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
     ctx.fillStyle = wedge; ctx.beginPath(); ctx.moveTo(0, 0);
     ctx.arc(0, 0, radius, -0.6, 0.05); ctx.closePath(); ctx.fill();
     ctx.restore();
-    for (let index = 0; index < 44; index++) {
+    for (let index = 0; index < 36; index++) {
       const angle = seeded(index) * TAU;
       const r = Math.sqrt(seeded(index + 91)) * radius;
       const targetBand = band(index * 2.1);
@@ -144,7 +152,7 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
     ctx.beginPath(); ctx.arc(cx, cy - size * 0.23, 2 + pulse * size * 0.035, 0, TAU); ctx.fill();
   } else if (name === "STARFIELD") {
     const speed = 0.075 + level * 0.17;
-    for (let index = 0; index < 230; index++) {
+    for (let index = 0; index < 160; index++) {
       const z0 = seeded(index + 4);
       const z = ((z0 + time * speed * (0.35 + seeded(index + 88))) % 1);
       const x0 = (seeded(index + 15) - 0.5) * 2;
@@ -164,11 +172,13 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
     ctx.globalAlpha = 0.34;
     ring(cx, cy, size * (0.05 + level * 0.025), 0.5, 1);
   } else if (name === "SONOGRAPH") {
-    const columns = Math.max(72, Math.min(150, Math.floor(w / 3)));
-    const rows = 42;
+    const columns = Math.max(32, Math.min(96, Math.floor(w / 5)));
+    const rows = 28;
     const history = state.sonogram || (state.sonogram = { last: -1, frames: [] });
-    if (time - history.last > 0.035) {
-      history.frames.push(Array.from({ length: rows }, (_, row) => band((row / rows) * 96)));
+    if (time - history.last > 0.06) {
+      const frame = new Uint8Array(rows);
+      for (let row = 0; row < rows; row++) frame[row] = Math.round(band((row / rows) * 96) * 255);
+      history.frames.push(frame);
       history.frames = history.frames.slice(-columns);
       history.last = time;
     }
@@ -178,14 +188,16 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
       const frame = history.frames[Math.max(0, history.frames.length - columns + x)];
       if (!frame) continue;
       for (let row = 0; row < rows; row++) {
-        const amplitude = frame[row];
+        const amplitude = frame[row] / 255;
         const age = x / columns;
         const glow = clamp(amplitude * (0.68 + age * 0.32));
-        if (glow < 0.035) continue;
-        ctx.fillStyle = `hsla(${178 - glow * 135},100%,${15 + glow * 48}%,${0.18 + glow * 0.82})`;
+        if (glow < 0.06) continue;
+        ctx.globalAlpha = 0.18 + glow * 0.82;
+        ctx.fillStyle = sonogramPalette[Math.min(15, Math.round(glow * 15))];
         ctx.fillRect(x * cellW, h - (row + 1) * cellH, cellW + 0.4, cellH + 0.35);
       }
     }
+    ctx.globalAlpha = 1;
     ctx.strokeStyle = signal;
     ctx.globalAlpha = 0.75;
     const sweepX = (time * 52) % w;
@@ -197,26 +209,39 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
     }
     line(waveLine, 0.76, 1);
   } else if (name === "NEUROSCAN") {
-    const count = 72;
-    const nodes = Array.from({ length: count }, (_, index) => {
-      const angle = index * 2.399963;
-      const radius = Math.sqrt((index + 0.5) / count);
-      const x = cx + Math.cos(angle) * radius * w * 0.39;
-      const y = cy + Math.sin(angle) * radius * h * 0.41;
-      const activity = clamp(0.18 + band(index * 1.28) * 0.65 + Math.sin(time * 2.2 + index * 0.7) * 0.14);
-      return { x, y, activity, radius: 1 + activity * 2.8 };
-    });
-    for (let a = 0; a < count; a++) {
-      for (let b = a + 1; b < count; b++) {
-        const first = nodes[a]; const second = nodes[b];
-        const dx = first.x - second.x; const dy = first.y - second.y;
-        const distance = Math.hypot(dx, dy);
-        if (distance > size * 0.105) continue;
-        const pulse = (Math.sin(time * 3 - distance * 0.018 + a * 0.2) + 1) * 0.5;
-        ctx.globalAlpha = 0.045 + pulse * Math.min(first.activity, second.activity) * 0.38;
-        ctx.lineWidth = 0.55 + pulse * 0.7;
-        ctx.beginPath(); ctx.moveTo(first.x, first.y); ctx.lineTo(second.x, second.y); ctx.stroke();
+    const count = w < 240 ? 30 : 48;
+    const graphKey = `${count}:${Math.round(w)}:${Math.round(h)}`;
+    let graph = state.neuroGraph;
+    if (!graph || graph.key !== graphKey) {
+      const positions = Array.from({ length: count }, (_, index) => {
+        const angle = index * 2.399963;
+        const radius = Math.sqrt((index + 0.5) / count);
+        return {
+          x: cx + Math.cos(angle) * radius * w * 0.39,
+          y: cy + Math.sin(angle) * radius * h * 0.41,
+        };
+      });
+      const edges = [];
+      for (let a = 0; a < count; a++) {
+        for (let b = a + 1; b < count; b++) {
+          const dx = positions[a].x - positions[b].x;
+          const dy = positions[a].y - positions[b].y;
+          const distance = Math.hypot(dx, dy);
+          if (distance <= size * 0.12) edges.push([a, b, distance]);
+        }
       }
+      graph = state.neuroGraph = { key: graphKey, positions, edges };
+    }
+    const nodes = graph.positions.map((position, index) => {
+      const activity = clamp(0.08 + band(index * 1.9) * 0.84);
+      return { ...position, activity, radius: 1 + activity * 2.8 };
+    });
+    for (const [a, b, distance] of graph.edges) {
+      const first = nodes[a]; const second = nodes[b];
+      const pulse = (Math.sin(time * 3 - distance * 0.018 + a * 0.2) + 1) * 0.5;
+      ctx.globalAlpha = 0.035 + pulse * Math.min(first.activity, second.activity) * 0.42;
+      ctx.lineWidth = 0.55 + pulse * 0.7;
+      ctx.beginPath(); ctx.moveTo(first.x, first.y); ctx.lineTo(second.x, second.y); ctx.stroke();
     }
     for (const node of nodes) {
       ctx.globalAlpha = 0.2 + node.activity * 0.8;
@@ -224,10 +249,10 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
       if (node.activity > 0.58) ring(node.x, node.y, node.radius * (1.7 + Math.sin(time * 5) * 0.25), node.activity * 0.28, 0.7);
     }
     ctx.globalAlpha = 0.18;
-    for (let fold = 0; fold < 5; fold++) {
+    for (let fold = 0; fold < 3; fold++) {
       const points = [];
-      for (let step = 0; step <= 40; step++) {
-        const angle = (step / 40) * Math.PI;
+      for (let step = 0; step <= 24; step++) {
+        const angle = (step / 24) * Math.PI;
         points.push({ x: cx + Math.cos(angle) * size * (0.11 + fold * 0.035), y: cy + Math.sin(angle) * size * 0.22 + Math.sin(angle * 3 + time) * 2 });
       }
       line(points, 0.18, 0.8);
@@ -249,7 +274,7 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
       ctx.lineWidth = 1 + (7 - orbit) * 0.25;
       ctx.beginPath(); ctx.ellipse(0, 0, orbitRadius, orbitRadius * 0.42, time * (orbit % 2 ? -0.11 : 0.11), 0, TAU); ctx.stroke();
     }
-    for (let particle = 0; particle < 150; particle++) {
+    for (let particle = 0; particle < 100; particle++) {
       const angle = time * (0.35 + seeded(particle) * 0.8) + particle * 2.4;
       const orbit = size * (0.19 + seeded(particle + 70) * 0.25);
       const x = Math.cos(angle) * orbit;
@@ -259,12 +284,12 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
     }
     ctx.globalAlpha = 1; ctx.fillStyle = "#010303"; ctx.shadowBlur = 0;
     ctx.beginPath(); ctx.arc(0, 0, radius, 0, TAU); ctx.fill();
-    ctx.strokeStyle = signal; ctx.shadowColor = signal; ctx.shadowBlur = 18;
+    ctx.strokeStyle = signal; ctx.shadowColor = signal; ctx.shadowBlur = 9;
     ring(0, 0, radius * (1.13 + pulse * 0.22), 0.9, 1.8);
     ctx.restore();
   } else if (name === "PRISM") {
-    const latitudes = 11;
-    const longitudes = 38;
+    const latitudes = 9;
+    const longitudes = 30;
     const points = [];
     const rotY = time * 0.28;
     const rotX = Math.sin(time * 0.21) * 0.6;
@@ -305,8 +330,8 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
       ctx.beginPath(); ctx.arc(point.x, point.y, 0.6 + point.energy * 1.5, 0, TAU); ctx.fill();
     }
   } else if (name === "VORTEX") {
-    const arms = 5;
-    const particles = 42;
+    const arms = 4;
+    const particles = 32;
     for (let arm = 0; arm < arms; arm++) {
       const points = [];
       for (let step = 0; step < particles; step++) {
@@ -329,8 +354,8 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
       ring(cx, cy, radius, 0.06 + band(ringIndex * 9) * 0.18, 0.8);
     }
   } else if (name === "SPECTRAL TERRAIN") {
-    const columns = 32;
-    const rows = 22;
+    const columns = w < 240 ? 14 : 24;
+    const rows = w < 240 ? 9 : 16;
     const project = (x, z, elevation) => {
       const perspective = 1 / (1 + z * 0.78);
       return { x: cx + x * size * 0.67 * perspective, y: h * 0.78 + z * size * 0.24 - elevation * size * 0.4 * perspective };
@@ -359,12 +384,12 @@ export function drawVisualizer(ctx, { width, height, name, time, spectrum, wavef
       line(points, 0.1 + band(column * 3) * 0.34, 0.65);
     }
   } else if (name === "AURORA") {
-    for (let layer = 0; layer < 9; layer++) {
+    for (let layer = 0; layer < 7; layer++) {
       const points = [];
       const energyBand = band(layer * 11);
-      for (let index = 0; index <= 240; index++) {
-        const x = (index / 240) * w;
-        const envelope = Math.pow(Math.sin(Math.PI * index / 240), 0.48);
+      for (let index = 0; index <= 120; index++) {
+        const x = (index / 120) * w;
+        const envelope = Math.pow(Math.sin(Math.PI * index / 120), 0.48);
         const waveA = Math.sin(index * 0.035 + time * (0.4 + layer * 0.03) + layer * 0.6);
         const waveB = Math.sin(index * 0.012 - time * 0.22 + layer) * 0.65;
         const y = h * (0.3 + layer * 0.055) + (waveA * 0.12 + waveB * 0.07) * h * envelope * (0.55 + energyBand);

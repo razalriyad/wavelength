@@ -68,7 +68,7 @@ function aa() {
         ((se.current = new e()),
           (he.current = se.current.createAnalyser()),
           (he.current.fftSize = 1024),
-          (he.current.smoothingTimeConstant = 0.82),
+          (he.current.smoothingTimeConstant = 0.72),
           (lowEq.current = se.current.createBiquadFilter()),
           (lowEq.current.type = "lowshelf"),
           (lowEq.current.frequency.value = 180),
@@ -183,7 +183,7 @@ function aa() {
           ((se.current = new e()),
             (he.current = se.current.createAnalyser()),
             (he.current.fftSize = 1024),
-            (he.current.smoothingTimeConstant = 0.82));
+            (he.current.smoothingTimeConstant = 0.72));
         }
         (await se.current.resume(),
           se.current.createMediaStreamSource(e).connect(he.current),
@@ -260,8 +260,14 @@ function aa() {
     if (highEq.current) highEq.current.gain.setTargetAtTime(eqTreble, now, 0.015);
   }, [eqBass, eqMid, eqTreble]);
   const Ie = ke(() => {
+    const nowMs = performance.now();
+    const state = Ve.current[M] || (Ve.current[M] = {});
+    if (nowMs - (state.lastFrameAt || 0) < 32) {
+      return void (Ee.current = requestAnimationFrame(Ie));
+    }
+    state.lastFrameAt = nowMs;
     const canvas = oe.current;
-    if (!canvas) return void (Ee.current = requestAnimationFrame(Ie));
+    if (!canvas) return;
     const bounds = canvas.getBoundingClientRect();
     const pixelRatio = Math.min(devicePixelRatio || 1, 2);
     const width = bounds.width;
@@ -276,21 +282,31 @@ function aa() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur = 0;
+    ctx.filter = "none";
     ctx.clearRect(0, 0, width, height);
     const analyser = he.current;
-    const spectrum = analyser ? new Uint8Array(analyser.frequencyBinCount) : new Uint8Array(512);
-    const waveform = analyser ? new Uint8Array(analyser.fftSize) : new Uint8Array(512);
+    const spectrumSize = analyser?.frequencyBinCount || 512;
+    const waveformSize = analyser?.fftSize || 512;
+    const spectrum = state.spectrum?.length === spectrumSize
+      ? state.spectrum
+      : (state.spectrum = new Uint8Array(spectrumSize));
+    const waveform = state.waveform?.length === waveformSize
+      ? state.waveform
+      : (state.waveform = new Uint8Array(waveformSize));
     if (analyser) {
       analyser.getByteFrequencyData(spectrum);
       analyser.getByteTimeDomainData(waveform);
     } else {
+      spectrum.fill(0);
       waveform.fill(128);
     }
-    const time = performance.now() / 1000;
-    const state = Ve.current[M] || (Ve.current[M] = {});
+    const time = nowMs / 1000;
     drawVisualizer(ctx, { width, height, name: M, time, spectrum, waveform, state });
     Ee.current = requestAnimationFrame(Ie);
-  }, [I, M]);
+  }, [I, M, a]);
   me(
     () => (
       cancelAnimationFrame(Ee.current),

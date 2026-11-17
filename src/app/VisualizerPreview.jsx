@@ -12,17 +12,22 @@ export default function VisualizerPreview({ name }) {
 
     const ctx = canvas.getContext("2d");
     const state = {};
-    const spectrum = new Uint8Array(512);
-    const waveform = new Uint8Array(512);
-    let raf = 0;
+    const spectrum = new Uint8Array(128);
+    const waveform = new Uint8Array(256);
     let width = 0;
     let height = 0;
-    let lastPaint = 0;
+    let interval = null;
+    let isIntersecting = false;
 
     const resize = () => {
       const bounds = canvas.getBoundingClientRect();
-      width = Math.max(1, bounds.width);
-      height = Math.max(1, bounds.height);
+      const nextWidth = Math.max(1, bounds.width);
+      const nextHeight = Math.max(1, bounds.height);
+      if (nextWidth !== width || nextHeight !== height) {
+        state.sonogram = undefined;
+      }
+      width = nextWidth;
+      height = nextHeight;
       canvas.width = Math.round(width);
       canvas.height = Math.round(height);
     };
@@ -31,10 +36,9 @@ export default function VisualizerPreview({ name }) {
     observer.observe(canvas);
     resize();
 
-    const paint = (now) => {
-      raf = requestAnimationFrame(paint);
-      if (!ctx || now - lastPaint < 140 || !width || !height) return;
-      lastPaint = now;
+    const paint = () => {
+      if (!ctx || !width || !height) return;
+      const now = performance.now();
       const time = now / 1000;
       const beat = Math.pow(Math.max(0, Math.sin(time * Math.PI * 2 * 1.45)), 7);
       for (let index = 0; index < spectrum.length; index++) {
@@ -52,9 +56,31 @@ export default function VisualizerPreview({ name }) {
       drawVisualizer(ctx, { width, height, name, time, spectrum, waveform, state });
     };
 
-    raf = requestAnimationFrame(paint);
+    const start = () => {
+      if (interval || !isIntersecting || document.visibilityState === "hidden") return;
+      paint();
+      interval = window.setInterval(paint, 200);
+    };
+    const stop = () => {
+      if (interval) window.clearInterval(interval);
+      interval = null;
+    };
+    const intersectionObserver = typeof IntersectionObserver === "function"
+      ? new IntersectionObserver(([entry]) => {
+          isIntersecting = Boolean(entry?.isIntersecting);
+          isIntersecting ? start() : stop();
+        }, { threshold: 0.01 })
+      : null;
+    intersectionObserver?.observe(canvas);
+    if (!intersectionObserver) isIntersecting = true;
+    const onVisibilityChange = () => document.visibilityState === "hidden" ? stop() : start();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    start();
+
     return () => {
-      cancelAnimationFrame(raf);
+      stop();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      intersectionObserver?.disconnect();
       observer.disconnect();
     };
   }, [name]);
